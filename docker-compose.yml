@@ -1,4 +1,19 @@
 services:
+  zkbio-mock:
+    build: .
+    command: ["node", "server/mock-zkbio.mjs"]
+    restart: unless-stopped
+    ports:
+      - "8090:8080"
+    environment:
+      MOCK_ZKBIO_PORT: 8080
+      MOCK_ZKBIO_TOKEN: demo-token
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "-", "http://127.0.0.1:8080/health"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
   mongo:
     image: mongo:8
     restart: unless-stopped
@@ -16,6 +31,8 @@ services:
     depends_on:
       mongo:
         condition: service_healthy
+      zkbio-mock:
+        condition: service_healthy
     ports:
       - "${DOORWATCH_WEB_PORT:-3080}:3000"
       - "4000:4000"
@@ -29,6 +46,8 @@ services:
       ZKBIO_POLL_INTERVAL_MS: 10000
       ZKBIO_REQUEST_TIMEOUT_MS: ${ZKBIO_REQUEST_TIMEOUT_MS:-8000}
       ZKBIO_ALLOW_INSECURE_TLS: ${ZKBIO_ALLOW_INSECURE_TLS:-false}
+      ZKBIO_SIMULATOR_URL: http://zkbio-mock:8080
+      ZKBIO_SIMULATOR_TOKEN: demo-token
       COLLECTOR_ID: ${COLLECTOR_ID:-doorwatch-local-01}
       CENTRAL_SERVER_URL: ${CENTRAL_SERVER_URL:-}
       CENTRAL_SERVER_KEY: ${CENTRAL_SERVER_KEY:-}

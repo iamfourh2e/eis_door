@@ -183,6 +183,24 @@ td small { margin-top: 2px; color: var(--muted); font-size: .69rem; }
 .save-row button:hover { background: var(--green-900); }
 .save-row button:disabled { opacity: .6; cursor: wait; }
 .webhook-settings { margin-top: 14px; }
+.simulator-panel { margin-top: 14px; }
+.simulator-body { display: grid; grid-template-columns: minmax(0, 1fr) 310px; }
+.simulator-copy { padding: 18px; }
+.simulator-badge { padding: 5px 8px; display: inline-flex; border-radius: 999px; color: var(--warning); background: var(--warning-bg); font-size: .68rem; font-weight: 700; }
+.simulator-badge.connected { color: #176e48; background: var(--green-100); }
+.simulator-copy h2 { margin: 13px 0 5px; font-size: 1rem; }
+.simulator-copy > p { max-width: 760px; margin: 0; color: var(--muted); font-size: .75rem; line-height: 1.55; }
+.simulator-copy dl { margin: 17px 0 0; display: flex; flex-wrap: wrap; gap: 8px; }
+.simulator-copy dl div { min-width: 120px; padding: 9px 11px; border-radius: 8px; background: #f4f7f5; }
+.simulator-copy dt { color: var(--muted); font-size: .67rem; }
+.simulator-copy dd { margin: 3px 0 0; font-size: .75rem; font-weight: 650; text-transform: capitalize; }
+.simulator-controls { padding: 18px; border-left: 1px solid var(--line); display: grid; align-content: center; gap: 9px; background: #f8faf9; }
+.simulator-controls button { min-height: 40px; padding: 0 12px; border: 1px solid #cbd8d1; border-radius: 8px; display: flex; align-items: center; justify-content: center; gap: 8px; background: #fff; font-size: .75rem; font-weight: 650; cursor: pointer; }
+.simulator-controls button.primary { border-color: var(--green-800); color: #fff; background: var(--green-800); }
+.simulator-controls button:hover:not(:disabled) { border-color: #8eaa9d; background: #f2f8f5; }
+.simulator-controls button.primary:hover:not(:disabled) { background: var(--green-900); }
+.simulator-controls button:disabled { opacity: .55; cursor: not-allowed; }
+.simulator-result { margin: 0 17px 16px; }
 .webhook-body { display: grid; grid-template-columns: minmax(0, 1fr) 230px; }
 .webhook-fields { padding: 17px; display: grid; grid-template-columns: 1fr 1fr; gap: 17px; }
 .webhook-fields .full { grid-column: 1 / -1; }
@@ -231,9 +249,10 @@ td small { margin-top: 2px; color: var(--muted); font-size: .69rem; }
   .metric-grid, .door-grid, .health-grid { grid-template-columns: 1fr; }
   .settings-grid, .settings-fields.two-column { grid-template-columns: 1fr; }
   .settings-actions, .settings-fields .full { grid-column: auto; }
-  .webhook-body, .webhook-fields { grid-template-columns: 1fr; }
+  .webhook-body, .webhook-fields, .simulator-body { grid-template-columns: 1fr; }
   .webhook-fields .full { grid-column: auto; }
   .webhook-summary { border-top: 1px solid var(--line); border-left: 0; }
+  .simulator-controls { border-top: 1px solid var(--line); border-left: 0; }
   .save-row { align-items: stretch; flex-direction: column; }
   .save-row button { width: 100%; }
   .filters { grid-template-columns: 1fr; }

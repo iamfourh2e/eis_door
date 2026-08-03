@@ -9,6 +9,7 @@ import {
   DoorClosed,
   DoorOpen,
   Filter,
+  FlaskConical,
   HeartPulse,
   History,
   KeyRound,
@@ -125,6 +126,14 @@ type WebhookForm = {
   timeoutMs: number;
 };
 
+type SimulatorStatus = {
+  available: boolean;
+  baseUrl?: string;
+  door?: { id: string; name: string; sensor: string; relay: string; connect: string };
+  queuedTransactions?: number;
+  transactionCount?: number;
+};
+
 const emptyDashboard: Dashboard = {
   totalDoors: 0,
   onlineDoors: 0,
@@ -210,6 +219,9 @@ export default function Home() {
   const [webhookStatus, setWebhookStatus] = useState<Record<string, number>>({});
   const [webhookSaving, setWebhookSaving] = useState(false);
   const [webhookMessage, setWebhookMessage] = useState<{ tone: "success" | "warning"; text: string } | null>(null);
+  const [simulator, setSimulator] = useState<SimulatorStatus | null>(null);
+  const [simulatorBusy, setSimulatorBusy] = useState("");
+  const [simulatorMessage, setSimulatorMessage] = useState<{ tone: "success" | "warning"; text: string } | null>(null);
 
   const load = useCallback(async () => {
     try {
@@ -265,13 +277,15 @@ export default function Home() {
 
   const loadSettings = useCallback(async () => {
     try {
-      const [response, webhookResponse] = await Promise.all([
+      const [response, webhookResponse, simulatorResponse] = await Promise.all([
         fetch(`${apiBase()}/settings/zkbio`, { cache: "no-store" }),
         fetch(`${apiBase()}/settings/webhook`, { cache: "no-store" }),
+        fetch(`${apiBase()}/simulator`, { cache: "no-store" }),
       ]);
-      if (!response.ok || !webhookResponse.ok) throw new Error("Could not load integration settings");
+      if (!response.ok || !webhookResponse.ok || !simulatorResponse.ok) throw new Error("Could not load integration settings");
       const settings = (await response.json()) as ZkbioSettings;
       const webhookResult = (await webhookResponse.json()) as { settings: WebhookSettings; status: Record<string, number> };
+      const simulatorResult = (await simulatorResponse.json()) as SimulatorStatus;
       setSavedSettings(settings);
       setSettingsForm({
         enabled: settings.enabled,
@@ -289,6 +303,7 @@ export default function Home() {
         secret: "",
         timeoutMs: webhookResult.settings.timeoutMs,
       });
+      setSimulator(simulatorResult);
     } catch (error) {
       setSettingsMessage({ tone: "warning", text: error instanceof Error ? error.message : "Could not load settings" });
     }
@@ -356,6 +371,46 @@ export default function Home() {
     }
   }
 
+  async function runSimulation(action: "connect" | "access" | "denied" | "close") {
+    setSimulatorBusy(action);
+    setSimulatorMessage(null);
+    try {
+      const response = await fetch(`${apiBase()}/simulator/${action}`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: action === "access" || action === "denied"
+          ? JSON.stringify({ pin: action === "access" ? "TEST-001" : "TEST-002", name: action === "access" ? "Demo Visitor" : "Unknown Visitor" })
+          : "{}",
+      });
+      const result = await response.json();
+      if (!response.ok) throw new Error(result.error || "Simulation failed");
+      if (result.settings) {
+        setSavedSettings(result.settings);
+        setSettingsForm({
+          enabled: result.settings.enabled,
+          baseUrl: result.settings.baseUrl,
+          accessToken: "",
+          pollIntervalMs: result.settings.pollIntervalMs,
+          timeoutMs: result.settings.timeoutMs,
+          allowInsecureTls: result.settings.allowInsecureTls,
+        });
+      }
+      setSimulator((current) => ({ ...current, available: true, ...(result.simulator || {}) }));
+      const messages = {
+        connect: `Simulator connected. ${result.connectionTest?.doorCount ?? 1} demo door is ready.`,
+        access: "Granted scan and physical door opening created. The complete event was processed through the collector.",
+        denied: "Denied scan created and saved through the collector.",
+        close: "Demo door closed and its state was collected.",
+      };
+      setSimulatorMessage({ tone: "success", text: messages[action] });
+      await load();
+    } catch (error) {
+      setSimulatorMessage({ tone: "warning", text: error instanceof Error ? error.message : "Simulation failed" });
+    } finally {
+      setSimulatorBusy("");
+    }
+  }
+
   const visibleEvents = useMemo(() => {
     const query = search.trim().toLowerCase();
     return events.filter((event) => {
@@ -370,6 +425,7 @@ export default function Home() {
   }, [events, resultFilter, search]);
 
   const connected = Boolean(health?.mongo.connected && health?.collector.configured && !health?.collector.lastError);
+  const simulatorConnected = Boolean(simulator?.available && savedSettings?.baseUrl === simulator.baseUrl);
   const navItems = [
     { id: "live", label: "Live monitor", icon: Activity },
     { id: "doors", label: "Doors", icon: DoorClosed },
@@ -533,6 +589,25 @@ export default function Home() {
                   <div className="save-row"><span>{savedSettings?.updatedAt ? `Last updated ${formatDateTime(savedSettings.updatedAt)}` : "Not configured yet"}</span><button type="submit" disabled={settingsSaving}>{settingsSaving ? "Saving and testing…" : "Save and test connection"}</button></div>
                 </div>
               </form>
+
+              <section className="panel simulator-panel" aria-labelledby="simulator-title">
+                <div className="panel-heading"><div><strong id="simulator-title">ZKBio device simulator</strong><span>Test the collector before your physical door arrives</span></div><FlaskConical size={19} /></div>
+                <div className="simulator-body">
+                  <div className="simulator-copy">
+                    <span className={`simulator-badge ${simulatorConnected ? "connected" : ""}`}>{simulatorConnected ? "Connected to demo server" : "Demo server available"}</span>
+                    <h2>{simulator?.door?.name || "Demo Front Door"}</h2>
+                    <p>The simulator reproduces ZKBio door-state and transaction endpoints. Generated events pass through the same polling, normalization, MongoDB, correlation, and webhook code as a real device.</p>
+                    <dl><div><dt>Door sensor</dt><dd>{simulator?.door?.sensor || "closed"}</dd></div><div><dt>Transactions</dt><dd>{simulator?.transactionCount || 0}</dd></div><div><dt>Polling</dt><dd>10 seconds</dd></div></dl>
+                  </div>
+                  <div className="simulator-controls">
+                    <button type="button" className="primary" disabled={Boolean(simulatorBusy)} onClick={() => runSimulation("connect")}><Server size={17} />{simulatorBusy === "connect" ? "Connecting…" : simulatorConnected ? "Reconnect demo server" : "Connect demo server"}</button>
+                    <button type="button" disabled={!simulatorConnected || Boolean(simulatorBusy)} onClick={() => runSimulation("access")}><ScanFace size={17} />{simulatorBusy === "access" ? "Running full test…" : "Simulate granted scan + open"}</button>
+                    <button type="button" disabled={!simulatorConnected || Boolean(simulatorBusy)} onClick={() => runSimulation("denied")}><ShieldAlert size={17} />{simulatorBusy === "denied" ? "Creating denial…" : "Simulate denied scan"}</button>
+                    <button type="button" disabled={!simulatorConnected || Boolean(simulatorBusy)} onClick={() => runSimulation("close")}><DoorClosed size={17} />{simulatorBusy === "close" ? "Closing…" : "Close demo door"}</button>
+                  </div>
+                </div>
+                {simulatorMessage ? <div className={`settings-result simulator-result ${simulatorMessage.tone}`} role="status">{simulatorMessage.tone === "success" ? <CheckCircle2 size={18} /> : <AlertTriangle size={18} />}<span>{simulatorMessage.text}</span></div> : null}
+              </section>
 
               <form className="panel webhook-settings" onSubmit={saveWebhook}>
                 <div className="panel-heading"><div><strong>Outbound webhook</strong><span>POST completed access events to another server</span></div><Webhook size={19} /></div>

@@ -281,3 +281,12 @@ export function pollNow() {
   clearTimeout(timer);
   scheduledCycle();
 }
+
+export async function pollOnce() {
+  const deadline = Date.now() + 5_000;
+  while (state.cycleRunning && Date.now() < deadline) {
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  }
+  if (state.cycleRunning) throw new Error("Collector is busy; try the simulation again");
+  await cycle();
+}

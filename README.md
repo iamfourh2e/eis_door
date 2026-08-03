@@ -68,3 +68,13 @@ Configure the destination in **Settings → Outbound webhook**. When DoorWatch c
 Requests use `Content-Type: application/json`, `X-DoorWatch-Event`, and `X-DoorWatch-Delivery` headers. If a bearer token is configured, DoorWatch sends it in the `Authorization` header. Non-2xx responses and network failures retry with exponential backoff up to 10 attempts.
 
 The destination can be a fixed URL or a dynamic URL template. For example, `https://example.com/events/{{person.pin}}` sends person `57` to `https://example.com/events/57`. You can use `{{id}}`, `{{collectorId}}`, `{{person.pin}}`, `{{person.cardNumber}}`, `{{door.id}}`, `{{door.name}}`, and `{{device.serialNumber}}` in the path or query string. Values are URL-encoded, placeholders cannot change the destination host, and the complete event remains available in the POST body.
+
+## ZKBio simulator
+
+Docker Compose starts a local ZKBio-compatible simulator automatically. Open **Settings → ZKBio device simulator** and select **Connect demo server**. The simulator provides the same door-state, transaction-monitor, and transaction-history endpoints used by the collector.
+
+- **Simulate granted scan + open** creates a granted transaction, collects it, changes the physical door sensor to open, correlates both events, stores them in MongoDB, and queues the outbound webhook.
+- **Simulate denied scan** creates a denied transaction through the same collector pipeline.
+- **Close demo door** restores the demo sensor and relay to their closed states.
+
+The simulator is exposed at `http://localhost:8090` for diagnostics. Its internal DoorWatch URL is `http://zkbio-mock:8080`, with the demo token `demo-token`.

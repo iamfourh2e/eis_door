@@ -1,11 +1,12 @@
 import cors from "cors";
 import express from "express";
 import { ObjectId } from "mongodb";
-import { collectorHealth, pollNow, startCollector, stopCollector, testZkbioConnection } from "./collector.mjs";
+import { collectorHealth, pollNow, pollOnce, startCollector, stopCollector, testZkbioConnection } from "./collector.mjs";
 import { config } from "./config.mjs";
 import { closeMongo, connectMongo, db, mongoHealth } from "./db.mjs";
 import { broadcast, liveClientCount, subscribe } from "./realtime.mjs";
-import { getPublicWebhookSettings, getPublicZkbioSettings, saveWebhookSettings, saveZkbioSettings } from "./settings.mjs";
+import { getPublicWebhookSettings, getPublicZkbioSettings, getZkbioSettings, saveWebhookSettings, saveZkbioSettings } from "./settings.mjs";
+import { simulatorConfiguration, simulatorRequest } from "./simulator.mjs";
 import { startWebhookWorker, stopWebhookWorker, testWebhook, webhookStatus } from "./webhooks.mjs";
 
 const app = express();
@@ -113,6 +114,63 @@ app.put("/api/settings/zkbio", async (request, response) => {
   }
   pollNow();
   response.json({ settings: await getPublicZkbioSettings(), connectionTest });
+});
+
+app.get("/api/simulator", async (_request, response) => {
+  const configuration = simulatorConfiguration();
+  if (!configuration.available) return response.json({ available: false });
+  const status = await simulatorRequest("status");
+  response.json({ available: true, baseUrl: configuration.baseUrl, ...status });
+});
+
+app.post("/api/simulator/connect", async (_request, response) => {
+  const configuration = simulatorConfiguration();
+  if (!configuration.available) return response.status(503).json({ error: "ZKBio simulator is not available" });
+  const saved = await saveZkbioSettings({
+    enabled: true,
+    baseUrl: configuration.baseUrl,
+    accessToken: configuration.accessToken,
+    pollIntervalMs: 10_000,
+    timeoutMs: 8_000,
+    allowInsecureTls: false,
+  });
+  const connectionTest = await testZkbioConnection(saved);
+  await simulatorRequest("door/close", {});
+  await pollOnce();
+  response.json({ ok: true, settings: await getPublicZkbioSettings(), connectionTest, simulator: await simulatorRequest("status") });
+});
+
+async function requireSimulatorConnection() {
+  const configuration = simulatorConfiguration();
+  const settings = await getZkbioSettings();
+  if (!configuration.available || settings.baseUrl !== configuration.baseUrl) {
+    throw new Error("Connect the ZKBio simulator first");
+  }
+}
+
+app.post("/api/simulator/access", async (request, response) => {
+  await requireSimulatorConnection();
+  await simulatorRequest("door/close", {});
+  await pollOnce();
+  const scan = await simulatorRequest("scan/granted", request.body ?? {});
+  await pollOnce();
+  await simulatorRequest("door/open", {});
+  await pollOnce();
+  response.json({ ok: true, scan: scan.transaction, simulator: await simulatorRequest("status") });
+});
+
+app.post("/api/simulator/denied", async (request, response) => {
+  await requireSimulatorConnection();
+  const scan = await simulatorRequest("scan/denied", request.body ?? {});
+  await pollOnce();
+  response.json({ ok: true, scan: scan.transaction, simulator: await simulatorRequest("status") });
+});
+
+app.post("/api/simulator/close", async (_request, response) => {
+  await requireSimulatorConnection();
+  await simulatorRequest("door/close", {});
+  await pollOnce();
+  response.json({ ok: true, simulator: await simulatorRequest("status") });
 });
 
 app.get("/api/settings/webhook", async (_request, response) => {
