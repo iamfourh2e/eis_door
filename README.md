@@ -4,11 +4,56 @@ DoorWatch is a local web dashboard and background collector for ZKBio CVSecurity
 
 ## Quick start with Docker
 
-1. Run `docker compose up --build`.
-2. Open `http://localhost:3080`.
-3. Open **Settings**, enter the ZKBio server URL and API token, then select **Save and test connection**.
+1. Copy `.env.example` to `.env` and change `ADMIN_PASSWORD` before the first startup.
+2. Run `docker compose up -d --build`.
+3. Open `http://localhost:3080` and sign in.
+4. Open **Settings**, enter the ZKBio server URL and API token, then select **Save and test connection**.
+
+The initial development login is:
+
+```text
+Username: admin
+Password: DoorWatch@123
+```
+
+`ADMIN_USERNAME` and `ADMIN_PASSWORD` provision the first administrator only when the MongoDB `users` collection has no matching account. Changing those environment values later does not overwrite an existing password.
 
 The API and live event stream run on port `4000`. Other devices on the LAN can use `http://YOUR-SERVER-IP:3080`.
+
+## Build the Docker image
+
+The root `Dockerfile` builds the UI and server into one production image. Build it directly with:
+
+```bash
+docker build -t doorwatch-local:latest .
+```
+
+The recommended complete local stack includes that image, MongoDB, persistent secrets, and the optional ZKBio simulator:
+
+```bash
+docker compose build
+docker compose up -d
+docker compose ps
+```
+
+To follow startup output:
+
+```bash
+docker compose logs -f doorwatch
+```
+
+To stop the services without deleting MongoDB or secret volumes:
+
+```bash
+docker compose down
+```
+
+The production image runs both processes:
+
+- UI on container port `3000`, published as `3080`
+- API, collector, and webhook worker on container port `4000`
+
+Set `AUTH_COOKIE_SECURE=true` when the app is served through HTTPS. Keep the generated session and configuration keys in the `doorwatch-secrets` volume.
 
 ## Local development
 
@@ -28,6 +73,7 @@ The web UI and collector/API start together. ZKBio polling is limited to a minim
 - `collector_state`: latest collector health and counters
 - `settings`: ZKBio connection settings; the API token is AES-256-GCM encrypted
 - `webhook_outbox`: durable outbound POST deliveries and retry history
+- `users`: administrator identities with salted scrypt password hashes
 
 The `events.sourceKey` index prevents duplicate records. If `CENTRAL_SERVER_URL` is configured, unsent events remain pending in MongoDB and retry automatically.
 

@@ -14,6 +14,7 @@ import {
   History,
   KeyRound,
   LockKeyhole,
+  LogOut,
   Menu,
   Radio,
   ScanFace,
@@ -134,6 +135,8 @@ type SimulatorStatus = {
   transactionCount?: number;
 };
 
+type AuthUser = { username: string; displayName: string; role: string };
+
 const emptyDashboard: Dashboard = {
   totalDoors: 0,
   onlineDoors: 0,
@@ -147,6 +150,10 @@ const emptyDashboard: Dashboard = {
 function apiBase() {
   if (typeof window === "undefined") return "http://localhost:4000/api";
   return `${window.location.protocol}//${window.location.hostname}:4000/api`;
+}
+
+function apiFetch(input: RequestInfo | URL, init: RequestInit = {}) {
+  return fetch(input, { ...init, credentials: "include" });
 }
 
 function formatTime(value?: string) {
@@ -192,6 +199,11 @@ function statusTone(event: DoorEvent) {
 }
 
 export default function Home() {
+  const [authUser, setAuthUser] = useState<AuthUser | null>(null);
+  const [authLoading, setAuthLoading] = useState(true);
+  const [loginForm, setLoginForm] = useState({ username: "admin", password: "" });
+  const [loginBusy, setLoginBusy] = useState(false);
+  const [loginError, setLoginError] = useState("");
   const [view, setView] = useState("live");
   const [mobileNav, setMobileNav] = useState(false);
   const [dashboard, setDashboard] = useState(emptyDashboard);
@@ -223,19 +235,32 @@ export default function Home() {
   const [simulatorBusy, setSimulatorBusy] = useState("");
   const [simulatorMessage, setSimulatorMessage] = useState<{ tone: "success" | "warning"; text: string } | null>(null);
 
+  useEffect(() => {
+    let active = true;
+    apiFetch(`${apiBase()}/auth/session`, { cache: "no-store" })
+      .then(async (response) => {
+        if (!response.ok) return null;
+        return (await response.json()) as { user: AuthUser };
+      })
+      .then((result) => { if (active) setAuthUser(result?.user || null); })
+      .catch(() => { if (active) setAuthUser(null); })
+      .finally(() => { if (active) setAuthLoading(false); });
+    return () => { active = false; };
+  }, []);
+
   const load = useCallback(async () => {
     try {
       const base = apiBase();
-      const healthResponse = await fetch(`${base}/health`, { cache: "no-store" });
+      const healthResponse = await apiFetch(`${base}/health`, { cache: "no-store" });
       if (!healthResponse.ok) throw new Error("Local collector API is not available");
       const nextHealth = (await healthResponse.json()) as Health;
       setHealth(nextHealth);
 
       if (nextHealth.mongo.connected) {
         const [dashboardResponse, doorsResponse, eventsResponse] = await Promise.all([
-          fetch(`${base}/dashboard`, { cache: "no-store" }),
-          fetch(`${base}/doors`, { cache: "no-store" }),
-          fetch(`${base}/events?limit=100`, { cache: "no-store" }),
+          apiFetch(`${base}/dashboard`, { cache: "no-store" }),
+          apiFetch(`${base}/doors`, { cache: "no-store" }),
+          apiFetch(`${base}/events?limit=100`, { cache: "no-store" }),
         ]);
         if (!dashboardResponse.ok || !doorsResponse.ok || !eventsResponse.ok) {
           throw new Error("Could not load monitoring data");
@@ -259,9 +284,10 @@ export default function Home() {
   }, []);
 
   useEffect(() => {
+    if (!authUser) return;
     const firstLoad = window.setTimeout(load, 0);
     const refresh = window.setInterval(load, 15_000);
-    const stream = new EventSource(`${apiBase()}/live`);
+    const stream = new EventSource(`${apiBase()}/live`, { withCredentials: true });
     stream.addEventListener("event", load);
     stream.addEventListener("doors", load);
     stream.addEventListener("health", (message) => {
@@ -273,14 +299,14 @@ export default function Home() {
       window.clearInterval(refresh);
       stream.close();
     };
-  }, [load]);
+  }, [authUser, load]);
 
   const loadSettings = useCallback(async () => {
     try {
       const [response, webhookResponse, simulatorResponse] = await Promise.all([
-        fetch(`${apiBase()}/settings/zkbio`, { cache: "no-store" }),
-        fetch(`${apiBase()}/settings/webhook`, { cache: "no-store" }),
-        fetch(`${apiBase()}/simulator`, { cache: "no-store" }),
+        apiFetch(`${apiBase()}/settings/zkbio`, { cache: "no-store" }),
+        apiFetch(`${apiBase()}/settings/webhook`, { cache: "no-store" }),
+        apiFetch(`${apiBase()}/simulator`, { cache: "no-store" }),
       ]);
       if (!response.ok || !webhookResponse.ok || !simulatorResponse.ok) throw new Error("Could not load integration settings");
       const settings = (await response.json()) as ZkbioSettings;
@@ -310,17 +336,17 @@ export default function Home() {
   }, []);
 
   useEffect(() => {
-    if (view !== "settings") return;
+    if (view !== "settings" || !authUser) return;
     const timer = window.setTimeout(loadSettings, 0);
     return () => window.clearTimeout(timer);
-  }, [loadSettings, view]);
+  }, [authUser, loadSettings, view]);
 
   async function saveSettings(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     setSettingsSaving(true);
     setSettingsMessage(null);
     try {
-      const response = await fetch(`${apiBase()}/settings/zkbio`, {
+      const response = await apiFetch(`${apiBase()}/settings/zkbio`, {
         method: "PUT",
         headers: { "content-type": "application/json" },
         body: JSON.stringify(settingsForm),
@@ -347,7 +373,7 @@ export default function Home() {
     setWebhookSaving(true);
     setWebhookMessage(null);
     try {
-      const response = await fetch(`${apiBase()}/settings/webhook`, {
+      const response = await apiFetch(`${apiBase()}/settings/webhook`, {
         method: "PUT",
         headers: { "content-type": "application/json" },
         body: JSON.stringify(webhookForm),
@@ -375,7 +401,7 @@ export default function Home() {
     setSimulatorBusy(action);
     setSimulatorMessage(null);
     try {
-      const response = await fetch(`${apiBase()}/simulator/${action}`, {
+      const response = await apiFetch(`${apiBase()}/simulator/${action}`, {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: action === "access" || action === "denied"
@@ -411,6 +437,36 @@ export default function Home() {
     }
   }
 
+  async function login(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setLoginBusy(true);
+    setLoginError("");
+    try {
+      const response = await apiFetch(`${apiBase()}/auth/login`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(loginForm),
+      });
+      const result = await response.json();
+      if (!response.ok) throw new Error(result.error || "Could not sign in");
+      setAuthUser(result.user);
+      setLoginForm((current) => ({ ...current, password: "" }));
+    } catch (error) {
+      setLoginError(error instanceof Error ? error.message : "Could not sign in");
+    } finally {
+      setLoginBusy(false);
+    }
+  }
+
+  async function logout() {
+    await apiFetch(`${apiBase()}/auth/logout`, { method: "POST" }).catch(() => {});
+    setAuthUser(null);
+    setHealth(null);
+    setDashboard(emptyDashboard);
+    setDoors([]);
+    setEvents([]);
+  }
+
   const visibleEvents = useMemo(() => {
     const query = search.trim().toLowerCase();
     return events.filter((event) => {
@@ -423,6 +479,28 @@ export default function Home() {
         .some((value) => value!.toLowerCase().includes(query));
     });
   }, [events, resultFilter, search]);
+
+  if (authLoading) {
+    return <div className="auth-shell"><div className="auth-loading"><span />Starting DoorWatch…</div></div>;
+  }
+
+  if (!authUser) {
+    return (
+      <main className="auth-shell">
+        <section className="auth-card">
+          <div className="auth-brand"><span className="brand-mark"><DoorOpen size={22} /></span><div><strong>DoorWatch</strong><small>Local access monitor</small></div></div>
+          <div className="auth-copy"><span><LockKeyhole size={18} /></span><h1>Administrator sign in</h1><p>Sign in to monitor doors, review access events, and manage integrations.</p></div>
+          <form onSubmit={login} className="auth-form">
+            <label><span>Username</span><input autoFocus autoComplete="username" value={loginForm.username} onChange={(event) => setLoginForm((current) => ({ ...current, username: event.target.value }))} required /></label>
+            <label><span>Password</span><input type="password" autoComplete="current-password" value={loginForm.password} onChange={(event) => setLoginForm((current) => ({ ...current, password: event.target.value }))} required placeholder="Enter administrator password" /></label>
+            {loginError ? <div className="auth-error" role="alert"><AlertTriangle size={17} /><span>{loginError}</span></div> : null}
+            <button type="submit" disabled={loginBusy}>{loginBusy ? "Signing in…" : "Sign in"}</button>
+          </form>
+          <p className="auth-footnote">Protected local administration</p>
+        </section>
+      </main>
+    );
+  }
 
   const connected = Boolean(health?.mongo.connected && health?.collector.configured && !health?.collector.lastError);
   const simulatorConnected = Boolean(simulator?.available && savedSettings?.baseUrl === simulator.baseUrl);
@@ -466,7 +544,7 @@ export default function Home() {
           <div className="top-status">
             <span className={`server-chip ${health?.mongo.connected ? "good" : "bad"}`}><Database size={15} /> MongoDB</span>
             <span className={`server-chip ${health?.collector.configured ? "good" : "bad"}`}><Server size={15} /> ZKBio</span>
-            <span className="avatar"><CircleUserRound size={19} /></span>
+            <button className="account-button" onClick={logout} title="Sign out"><CircleUserRound size={18} /><span>{authUser.displayName}</span><LogOut size={15} /></button>
           </div>
         </header>
 

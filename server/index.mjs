@@ -1,6 +1,7 @@
 import cors from "cors";
 import express from "express";
 import { ObjectId } from "mongodb";
+import { authenticate, clearSession, provisionDefaultAdmin, readSession, requireAuth, setSession } from "./auth.mjs";
 import { collectorHealth, pollNow, pollOnce, startCollector, stopCollector, testZkbioConnection } from "./collector.mjs";
 import { config } from "./config.mjs";
 import { closeMongo, connectMongo, db, mongoHealth } from "./db.mjs";
@@ -11,12 +12,35 @@ import { startWebhookWorker, stopWebhookWorker, testWebhook, webhookStatus } fro
 
 const app = express();
 app.disable("x-powered-by");
-app.use(cors({ origin: true, credentials: false }));
+app.use(cors({ origin: true, credentials: true }));
 app.use(express.json({ limit: "2mb" }));
 
 function serialize(value) {
   return JSON.parse(JSON.stringify(value));
 }
+
+app.post("/api/auth/login", async (request, response) => {
+  const user = await authenticate(request.body?.username, request.body?.password);
+  if (!user) return response.status(401).json({ error: "Invalid username or password" });
+  await setSession(response, user);
+  response.json({ user: { username: user.username, displayName: user.displayName, role: user.role } });
+});
+
+app.get("/api/auth/session", async (request, response) => {
+  const session = await readSession(request);
+  if (!session) return response.status(401).json({ error: "Authentication required" });
+  response.json({ user: { username: session.username, displayName: session.displayName, role: session.role } });
+});
+
+app.post("/api/auth/logout", (_request, response) => {
+  clearSession(response);
+  response.json({ ok: true });
+});
+
+app.use("/api", (request, response, next) => {
+  if (request.path === "/ingest/events") return next();
+  return requireAuth(request, response, next);
+});
 
 app.get("/api/health", (_request, response) => {
   response.json({
@@ -232,6 +256,7 @@ const server = app.listen(config.port, "0.0.0.0", () => {
 async function connectWithRetry() {
   try {
     await connectMongo();
+    await provisionDefaultAdmin();
     console.log(`Connected to MongoDB database ${config.mongoDb}`);
     startCollector();
     startWebhookWorker();

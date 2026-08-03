@@ -1,5 +1,6 @@
 services:
   zkbio-mock:
+    image: doorwatch-local:latest
     build: .
     command: ["node", "server/mock-zkbio.mjs"]
     restart: unless-stopped
@@ -26,6 +27,7 @@ services:
       retries: 20
 
   doorwatch:
+    image: doorwatch-local:latest
     build: .
     restart: unless-stopped
     depends_on:
@@ -52,6 +54,11 @@ services:
       CENTRAL_SERVER_URL: ${CENTRAL_SERVER_URL:-}
       CENTRAL_SERVER_KEY: ${CENTRAL_SERVER_KEY:-}
       CONFIG_KEY_PATH: /app/server-data/config.key
+      SESSION_KEY_PATH: /app/server-data/session.key
+      SESSION_HOURS: ${SESSION_HOURS:-12}
+      ADMIN_USERNAME: ${ADMIN_USERNAME:-admin}
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD:-DoorWatch@123}
+      AUTH_COOKIE_SECURE: ${AUTH_COOKIE_SECURE:-false}
     volumes:
       - doorwatch-secrets:/app/server-data
 
