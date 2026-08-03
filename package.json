@@ -1,0 +1,52 @@
+{
+  "name": "doorwatch-local",
+  "version": "0.1.0",
+  "private": true,
+  "engines": {
+    "node": ">=22.13.0"
+  },
+  "scripts": {
+    "dev": "concurrently -k -n web,collector -c cyan,green \"npm:dev:web\" \"npm:dev:server\"",
+    "dev:web": "WRANGLER_LOG_PATH=.wrangler/wrangler.log vinext dev --host 0.0.0.0 --port 3000",
+    "dev:server": "node server/index.mjs",
+    "build": "WRANGLER_LOG_PATH=.wrangler/wrangler.log vinext build",
+    "start": "WRANGLER_LOG_PATH=.wrangler/wrangler.log vinext start --host 0.0.0.0 --port 3000",
+    "start:local": "concurrently -k -n web,collector -c cyan,green \"npm:start\" \"npm:start:server\"",
+    "start:server": "node server/index.mjs",
+    "test": "node --test tests/*.test.mjs && npm run build",
+    "lint": "eslint . --ignore-pattern dist --ignore-pattern .next",
+    "db:generate": "drizzle-kit generate"
+  },
+  "dependencies": {
+    "cors": "^2.8.5",
+    "dotenv": "^17.2.3",
+    "drizzle-orm": "0.45.2",
+    "express": "^5.2.1",
+    "lucide-react": "^0.468.0",
+    "mongodb": "^7.0.0",
+    "next": "16.2.6",
+    "react": "19.2.6",
+    "react-dom": "19.2.6",
+    "undici": "^7.16.0"
+  },
+  "devDependencies": {
+    "@cloudflare/vite-plugin": "1.37.1",
+    "@tailwindcss/postcss": "4.2.1",
+    "@types/node": "22.19.19",
+    "@types/react": "19.2.14",
+    "@types/react-dom": "19.2.3",
+    "@vitejs/plugin-react": "6.0.2",
+    "@vitejs/plugin-rsc": "0.5.26",
+    "concurrently": "^9.2.1",
+    "drizzle-kit": "0.31.10",
+    "eslint": "9.39.4",
+    "eslint-config-next": "16.2.6",
+    "react-server-dom-webpack": "19.2.6",
+    "tailwindcss": "4.2.1",
+    "typescript": "5.9.3",
+    "vinext": "0.0.50",
+    "vite": "8.0.13",
+    "wrangler": "4.92.0"
+  },
+  "type": "module"
+}

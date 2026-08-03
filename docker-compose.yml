@@ -1,0 +1,41 @@
+services:
+  mongo:
+    image: mongo:8
+    restart: unless-stopped
+    volumes:
+      - doorwatch-mongo:/data/db
+    healthcheck:
+      test: ["CMD", "mongosh", "--quiet", "--eval", "db.adminCommand('ping').ok"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  doorwatch:
+    build: .
+    restart: unless-stopped
+    depends_on:
+      mongo:
+        condition: service_healthy
+    ports:
+      - "${DOORWATCH_WEB_PORT:-3080}:3000"
+      - "4000:4000"
+    environment:
+      API_PORT: 4000
+      MONGODB_URI: mongodb://mongo:27017
+      MONGODB_DB: ${MONGODB_DB:-doorwatch}
+      ZKBIO_ENABLED: ${ZKBIO_ENABLED:-true}
+      ZKBIO_BASE_URL: ${ZKBIO_BASE_URL:-}
+      ZKBIO_ACCESS_TOKEN: ${ZKBIO_ACCESS_TOKEN:-}
+      ZKBIO_POLL_INTERVAL_MS: 10000
+      ZKBIO_REQUEST_TIMEOUT_MS: ${ZKBIO_REQUEST_TIMEOUT_MS:-8000}
+      ZKBIO_ALLOW_INSECURE_TLS: ${ZKBIO_ALLOW_INSECURE_TLS:-false}
+      COLLECTOR_ID: ${COLLECTOR_ID:-doorwatch-local-01}
+      CENTRAL_SERVER_URL: ${CENTRAL_SERVER_URL:-}
+      CENTRAL_SERVER_KEY: ${CENTRAL_SERVER_KEY:-}
+      CONFIG_KEY_PATH: /app/server-data/config.key
+    volumes:
+      - doorwatch-secrets:/app/server-data
+
+volumes:
+  doorwatch-mongo:
+  doorwatch-secrets:
