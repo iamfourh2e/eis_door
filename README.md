@@ -22,33 +22,134 @@ The API and live event stream run on port `4000`. Other devices on the LAN can u
 
 ## Build the Docker image
 
-The root `Dockerfile` builds the UI and server into one production image. Build it directly with:
+The root `Dockerfile` builds the web UI, API, collector, webhook worker, and simulator code into one production image.
+
+### 1. Build for the destination server
+
+From the project directory, build for a typical 64-bit Intel/AMD Linux server:
 
 ```bash
-docker build -t doorwatch-local:latest .
+docker buildx build \
+  --platform linux/amd64 \
+  --load \
+  -t doorwatch-local:1.0.0-amd64 .
 ```
 
-The recommended complete local stack includes that image, MongoDB, persistent secrets, and the optional ZKBio simulator:
+For an ARM64 server, replace `linux/amd64` with `linux/arm64` and use a matching image tag and Compose configuration.
+
+### 2. Export and compress the image
 
 ```bash
-docker compose build
+docker save \
+  -o doorwatch-local-1.0.0-amd64.tar \
+  doorwatch-local:1.0.0-amd64
+
+gzip -9 doorwatch-local-1.0.0-amd64.tar
+```
+
+The result is the portable image file:
+
+```text
+doorwatch-local-1.0.0-amd64.tar.gz
+```
+
+Generate a checksum before transferring it:
+
+```bash
+shasum -a 256 doorwatch-local-1.0.0-amd64.tar.gz
+```
+
+### 3. Transfer the release to another server
+
+Copy the complete release directory so the image, Compose file, environment example, and deployment guide stay together:
+
+```bash
+scp -r release/doorwatch-1.0.0-amd64 \
+  YOUR_USER@YOUR_SERVER_IP:/opt/doorwatch
+```
+
+You may also transfer the directory using USB storage or another secure file-sharing method.
+
+### 4. Import the image on the destination server
+
+```bash
+ssh YOUR_USER@YOUR_SERVER_IP
+cd /opt/doorwatch/doorwatch-1.0.0-amd64
+
+docker load -i doorwatch-local-1.0.0-amd64.tar.gz
+docker image ls doorwatch-local
+```
+
+### 5. Configure and start DoorWatch
+
+Create the runtime environment file and change the administrator password before the first startup:
+
+```bash
+cp .env.example .env
+nano .env
+```
+
+At minimum, review these values:
+
+```env
+ADMIN_USERNAME=admin
+ADMIN_PASSWORD=YourStrongPassword
+DOORWATCH_WEB_PORT=3080
+DOORWATCH_API_PORT=4000
+```
+
+Start the complete stack:
+
+```bash
 docker compose up -d
 docker compose ps
 ```
 
-To follow startup output:
+Open `http://YOUR_SERVER_IP:3080` and sign in with the administrator credentials from `.env`.
+
+### Docker operations
+
+Follow startup and runtime logs:
 
 ```bash
 docker compose logs -f doorwatch
 ```
 
-To stop the services without deleting MongoDB or secret volumes:
+Restart only DoorWatch:
+
+```bash
+docker compose restart doorwatch
+```
+
+Stop the stack without deleting MongoDB records or encryption/session keys:
 
 ```bash
 docker compose down
 ```
 
-The production image runs both processes:
+Do not add `-v` to `docker compose down` unless you intentionally want to delete the persistent DoorWatch database and secret volumes.
+
+### Offline destination server
+
+The DoorWatch image does not contain MongoDB. If the destination server cannot access Docker Hub, export the MongoDB image on the build computer too:
+
+```bash
+docker pull --platform linux/amd64 mongo:8
+docker save -o mongo-8.tar mongo:8
+gzip -9 mongo-8.tar
+```
+
+Transfer `mongo-8.tar.gz` with the DoorWatch release, then import both images on the destination server:
+
+```bash
+docker load -i doorwatch-local-1.0.0-amd64.tar.gz
+docker load -i mongo-8.tar.gz
+docker compose up -d
+```
+
+### Container ports and security
+
+The production image runs:
 
 - UI on container port `3000`, published as `3080`
 - API, collector, and webhook worker on container port `4000`

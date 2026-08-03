@@ -489,7 +489,7 @@ export default function Home() {
       <main className="auth-shell">
         <section className="auth-card">
           <div className="auth-brand"><span className="brand-mark"><DoorOpen size={22} /></span><div><strong>DoorWatch</strong><small>Local access monitor</small></div></div>
-          <div className="auth-copy"><span><LockKeyhole size={18} /></span><h1>Administrator sign in</h1><p>Sign in to monitor doors, review access events, and manage integrations.</p></div>
+          <div className="auth-copy"><p>Sign in to monitor doors, review access events, and manage integrations.</p></div>
           <form onSubmit={login} className="auth-form">
             <label><span>Username</span><input autoFocus autoComplete="username" value={loginForm.username} onChange={(event) => setLoginForm((current) => ({ ...current, username: event.target.value }))} required /></label>
             <label><span>Password</span><input type="password" autoComplete="current-password" value={loginForm.password} onChange={(event) => setLoginForm((current) => ({ ...current, password: event.target.value }))} required placeholder="Enter administrator password" /></label>
