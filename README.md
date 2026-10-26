@@ -2,6 +2,8 @@
 
 DoorWatch is a local web dashboard and background collector for ZKBio CVSecurity. It polls access transactions and physical door state every 10 seconds, stores normalized and raw records in MongoDB, detects door transitions, and optionally forwards events to a central server.
 
+For a full walkthrough of the dashboard, simulator, ZKBio connection setup, and webhook configuration, see the **[User Guide](./USER_GUIDE.md)**.
+
 ## Quick start with Docker
 
 1. Copy `.env.example` to `.env` and change `ADMIN_PASSWORD` before the first startup.
