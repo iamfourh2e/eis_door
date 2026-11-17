@@ -7,22 +7,23 @@ import { resolveWebhookUrl } from "./webhook-template.mjs";
 
 let workerTimer;
 
-function headers(settings, deliveryId) {
+function headers(settings, deliveryId, eventType = "access.granted") {
   return {
     "content-type": "application/json",
     "user-agent": "DoorWatch-Webhook/1.0",
-    "x-doorwatch-event": "access.granted_opened",
+    "x-doorwatch-event": eventType,
     "x-doorwatch-delivery": deliveryId,
     ...(settings.secret ? { authorization: `Bearer ${settings.secret}` } : {}),
   };
 }
 
-export function webhookPayload(scan, doorTransition) {
+export function webhookPayload(scan, doorTransition = null) {
+  const eventType = doorTransition ? "access.granted_opened" : "access.granted";
   return {
     version: "1.0",
-    type: "access.granted_opened",
-    id: scan.correlationId,
-    occurredAt: doorTransition.eventTime,
+    type: eventType,
+    id: scan.correlationId || String(scan._id || scan.sourceKey || ""),
+    occurredAt: doorTransition?.eventTime || scan.eventTime,
     collectorId: config.collectorId,
     person: {
       pin: scan.personPin || null,
@@ -38,42 +39,43 @@ export function webhookPayload(scan, doorTransition) {
       areaName: scan.areaName || null,
     },
     door: {
-      id: doorTransition.doorId || null,
-      name: doorTransition.doorName || scan.doorName || null,
-      openedAt: doorTransition.eventTime,
-      sensor: doorTransition.sensorState || null,
-      relay: doorTransition.relayState || null,
-      alarm: doorTransition.alarmState || null,
-      connection: doorTransition.connectionState || null,
+      id: doorTransition?.doorId || null,
+      name: doorTransition?.doorName || scan.doorName || null,
+      openedAt: doorTransition?.eventTime || null,
+      sensor: doorTransition?.sensorState || null,
+      relay: doorTransition?.relayState || null,
+      alarm: doorTransition?.alarmState || null,
+      connection: doorTransition?.connectionState || null,
     },
     device: {
       serialNumber: scan.deviceSn || null,
       name: scan.deviceName || null,
-      deviceId: doorTransition.deviceId || null,
+      deviceId: doorTransition?.deviceId || null,
     },
     raw: {
       transaction: scan.rawPayload || null,
-      doorState: doorTransition.rawPayload || null,
+      doorState: doorTransition?.rawPayload || null,
     },
   };
 }
 
-export async function enqueueAccessOpenedWebhook(scan, doorTransition) {
+async function enqueueWebhook(scan, doorTransition = null) {
   const database = db();
   if (!database) return false;
   const settings = await getWebhookSettings();
   if (!settings.enabled || !settings.url) return false;
   const now = new Date();
   const sourceEventId = String(scan._id);
+  const payload = webhookPayload(scan, doorTransition);
   const result = await database.collection("webhook_outbox").updateOne(
     { sourceEventId },
     {
       $setOnInsert: {
         deliveryId: randomUUID(),
         sourceEventId,
-        correlationId: scan.correlationId,
-        eventType: "access.granted_opened",
-        payload: webhookPayload(scan, doorTransition),
+        correlationId: scan.correlationId || null,
+        eventType: payload.type,
+        payload,
         status: "pending",
         attempts: 0,
         nextAttemptAt: now,
@@ -86,11 +88,19 @@ export async function enqueueAccessOpenedWebhook(scan, doorTransition) {
   return result.upsertedCount === 1;
 }
 
+export async function enqueueAccessGrantedWebhook(scan) {
+  return enqueueWebhook(scan, null);
+}
+
+export async function enqueueAccessOpenedWebhook(scan, doorTransition) {
+  return enqueueWebhook(scan, doorTransition);
+}
+
 async function post(settings, deliveryId, payload) {
   const resolvedUrl = resolveWebhookUrl(settings.url, payload);
   const response = await fetch(resolvedUrl, {
     method: "POST",
-    headers: headers(settings, deliveryId),
+    headers: headers(settings, deliveryId, payload.type || "access.granted"),
     body: JSON.stringify(payload),
     signal: AbortSignal.timeout(settings.timeoutMs),
   });
@@ -118,6 +128,8 @@ async function deliverPending() {
       );
       broadcast("webhook", { deliveryId: delivery.deliveryId, status: "delivered" });
     } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      console.error(`[${new Date().toISOString()}] [webhook] Delivery ${delivery.deliveryId} failed: ${message}`);
       const attempts = delivery.attempts + 1;
       const dead = attempts >= 10;
       const delayMs = Math.min(15 * 60_000, 5_000 * 2 ** Math.min(attempts - 1, 8));
@@ -129,7 +141,7 @@ async function deliverPending() {
             attempts,
             nextAttemptAt: new Date(Date.now() + delayMs),
             updatedAt: new Date(),
-            lastError: error instanceof Error ? error.message : String(error),
+            lastError: message,
           },
         },
       );

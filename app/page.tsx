@@ -4,6 +4,10 @@ import {
   Activity,
   AlertTriangle,
   CheckCircle2,
+  ChevronLeft,
+  ChevronRight,
+  ChevronsLeft,
+  ChevronsRight,
   CircleUserRound,
   Database,
   DoorClosed,
@@ -29,7 +33,23 @@ import {
   X,
 } from "lucide-react";
 import type { FormEvent } from "react";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
+
+type PaginatedEvents = {
+  items: DoorEvent[];
+  page: number;
+  limit: number;
+  total: number;
+  totalPages: number;
+};
+
+const emptyEventsPage = (limit = 25): PaginatedEvents => ({
+  items: [],
+  page: 1,
+  limit,
+  total: 0,
+  totalPages: 1,
+});
 
 type Dashboard = {
   totalDoors: number;
@@ -208,10 +228,17 @@ export default function Home() {
   const [mobileNav, setMobileNav] = useState(false);
   const [dashboard, setDashboard] = useState(emptyDashboard);
   const [doors, setDoors] = useState<Door[]>([]);
-  const [events, setEvents] = useState<DoorEvent[]>([]);
+  const [liveEventsPage, setLiveEventsPage] = useState<PaginatedEvents>(() => emptyEventsPage(25));
+  const [livePage, setLivePage] = useState(1);
+  const [liveLimit, setLiveLimit] = useState(25);
+  const [historyEventsPage, setHistoryEventsPage] = useState<PaginatedEvents>(() => emptyEventsPage(25));
+  const [historyPage, setHistoryPage] = useState(1);
+  const [historyLimit, setHistoryLimit] = useState(25);
+  const [historyLoading, setHistoryLoading] = useState(false);
   const [health, setHealth] = useState<Health | null>(null);
   const [selected, setSelected] = useState<DoorEvent | null>(null);
   const [search, setSearch] = useState("");
+  const [debouncedSearch, setDebouncedSearch] = useState("");
   const [resultFilter, setResultFilter] = useState("all");
   const [loading, setLoading] = useState(true);
   const [apiError, setApiError] = useState("");
@@ -248,6 +275,35 @@ export default function Home() {
     return () => { active = false; };
   }, []);
 
+  useEffect(() => {
+    const timer = window.setTimeout(() => {
+      setDebouncedSearch(search.trim());
+    }, 250);
+    return () => window.clearTimeout(timer);
+  }, [search]);
+
+  const loadHistory = useCallback(async () => {
+    if (!authUser) return;
+    setHistoryLoading(true);
+    try {
+      const params = new URLSearchParams({
+        page: String(historyPage),
+        limit: String(historyLimit),
+      });
+      if (resultFilter !== "all") params.set("result", resultFilter);
+      if (debouncedSearch) params.set("search", debouncedSearch);
+      const response = await apiFetch(`${apiBase()}/events?${params.toString()}`, { cache: "no-store" });
+      if (!response.ok) throw new Error("Could not load event history");
+      const nextPage = (await response.json()) as PaginatedEvents;
+      setHistoryEventsPage(nextPage);
+      if (nextPage.page !== historyPage) setHistoryPage(nextPage.page);
+    } catch (error) {
+      setApiError(error instanceof Error ? error.message : "Unable to load event history");
+    } finally {
+      setHistoryLoading(false);
+    }
+  }, [authUser, debouncedSearch, historyLimit, historyPage, resultFilter]);
+
   const load = useCallback(async () => {
     try {
       const base = apiBase();
@@ -260,20 +316,21 @@ export default function Home() {
         const [dashboardResponse, doorsResponse, eventsResponse] = await Promise.all([
           apiFetch(`${base}/dashboard`, { cache: "no-store" }),
           apiFetch(`${base}/doors`, { cache: "no-store" }),
-          apiFetch(`${base}/events?limit=100`, { cache: "no-store" }),
+          apiFetch(`${base}/events?page=${livePage}&limit=${liveLimit}`, { cache: "no-store" }),
         ]);
         if (!dashboardResponse.ok || !doorsResponse.ok || !eventsResponse.ok) {
           throw new Error("Could not load monitoring data");
         }
-        const [nextDashboard, nextDoors, nextEvents] = await Promise.all([
+        const [nextDashboard, nextDoors, nextEventsPage] = await Promise.all([
           dashboardResponse.json() as Promise<Dashboard>,
           doorsResponse.json() as Promise<Door[]>,
-          eventsResponse.json() as Promise<DoorEvent[]>,
+          eventsResponse.json() as Promise<PaginatedEvents>,
         ]);
         setDashboard(nextDashboard);
         setDoors(nextDoors);
-        setEvents(nextEvents);
-        setSelected((current) => current ?? nextEvents[0] ?? null);
+        setLiveEventsPage(nextEventsPage);
+        if (nextEventsPage.page !== livePage) setLivePage(nextEventsPage.page);
+        setSelected((current) => current ?? nextEventsPage.items[0] ?? null);
       }
       setApiError("");
     } catch (error) {
@@ -281,14 +338,26 @@ export default function Home() {
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [liveLimit, livePage]);
+
+  useEffect(() => {
+    if (!authUser || view !== "events") return;
+    const timer = window.setTimeout(loadHistory, 0);
+    return () => window.clearTimeout(timer);
+  }, [authUser, loadHistory, view]);
 
   useEffect(() => {
     if (!authUser) return;
     const firstLoad = window.setTimeout(load, 0);
     const refresh = window.setInterval(load, 15_000);
     const stream = new EventSource(`${apiBase()}/live`, { withCredentials: true });
-    stream.addEventListener("event", load);
+    const handleEventStream = () => {
+      load();
+      if (view === "events" && historyPage === 1) {
+        loadHistory();
+      }
+    };
+    stream.addEventListener("event", handleEventStream);
     stream.addEventListener("doors", load);
     stream.addEventListener("health", (message) => {
       const collector = JSON.parse((message as MessageEvent).data);
@@ -299,7 +368,7 @@ export default function Home() {
       window.clearInterval(refresh);
       stream.close();
     };
-  }, [authUser, load]);
+  }, [authUser, historyPage, load, loadHistory, view]);
 
   const loadSettings = useCallback(async () => {
     try {
@@ -464,21 +533,9 @@ export default function Home() {
     setHealth(null);
     setDashboard(emptyDashboard);
     setDoors([]);
-    setEvents([]);
+    setLiveEventsPage(emptyEventsPage(liveLimit));
+    setHistoryEventsPage(emptyEventsPage(historyLimit));
   }
-
-  const visibleEvents = useMemo(() => {
-    const query = search.trim().toLowerCase();
-    return events.filter((event) => {
-      if (resultFilter !== "all" && event.accessResult !== resultFilter && event.severity !== resultFilter) {
-        return false;
-      }
-      if (!query) return true;
-      return [event.personName, event.personPin, event.cardNumber, event.doorName, event.eventName]
-        .filter(Boolean)
-        .some((value) => value!.toLowerCase().includes(query));
-    });
-  }, [events, resultFilter, search]);
 
   if (authLoading) {
     return <div className="auth-shell"><div className="auth-loading"><span />Starting DoorWatch…</div></div>;
@@ -572,7 +629,18 @@ export default function Home() {
               <div className="monitor-grid">
                 <div className="panel">
                   <div className="panel-heading"><div><strong>Recent activity</strong><span>Newest events appear automatically</span></div><span className="live-badge"><span />Live</span></div>
-                  <EventTable events={events.slice(0, 25)} onSelect={setSelected} loading={loading} />
+                  <EventTable events={liveEventsPage.items} onSelect={setSelected} loading={loading} />
+                  <PaginationBar
+                    page={liveEventsPage.page}
+                    totalPages={liveEventsPage.totalPages}
+                    total={liveEventsPage.total}
+                    limit={liveLimit}
+                    onPageChange={setLivePage}
+                    onLimitChange={(nextLimit) => {
+                      setLiveLimit(nextLimit);
+                      setLivePage(1);
+                    }}
+                  />
                 </div>
                 <EventDetail event={selected} />
               </div>
@@ -591,10 +659,22 @@ export default function Home() {
               <div className="page-heading"><div><p className="eyebrow"><History size={14} /> Archive</p><h1>Event history</h1><p>Search all scans, openings, denials, and alarms saved in MongoDB.</p></div></div>
               <div className="panel">
                 <div className="filters">
-                  <label className="search-box"><Search size={17} /><input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search person, PIN, card, or door" /></label>
-                  <label className="select-box"><Filter size={16} /><select value={resultFilter} onChange={(event) => setResultFilter(event.target.value)}><option value="all">All results</option><option value="granted">Granted</option><option value="denied">Denied</option><option value="warning">Warnings</option><option value="critical">Critical</option></select></label>
+                  <label className="search-box"><Search size={17} /><input value={search} onChange={(event) => { setSearch(event.target.value); setHistoryPage(1); }} placeholder="Search person, PIN, card, or door" /></label>
+                  <label className="select-box"><Filter size={16} /><select value={resultFilter} onChange={(event) => { setResultFilter(event.target.value); setHistoryPage(1); }}><option value="all">All results</option><option value="granted">Granted</option><option value="denied">Denied</option><option value="warning">Warnings</option><option value="critical">Critical</option></select></label>
                 </div>
-                <EventTable events={visibleEvents} onSelect={setSelected} loading={loading} showDate />
+                <EventTable events={historyEventsPage.items} onSelect={setSelected} loading={historyLoading && !historyEventsPage.items.length} showDate />
+                <PaginationBar
+                  page={historyEventsPage.page}
+                  totalPages={historyEventsPage.totalPages}
+                  total={historyEventsPage.total}
+                  limit={historyLimit}
+                  loading={historyLoading}
+                  onPageChange={setHistoryPage}
+                  onLimitChange={(nextLimit) => {
+                    setHistoryLimit(nextLimit);
+                    setHistoryPage(1);
+                  }}
+                />
               </div>
             </section>
           )}
@@ -691,7 +771,7 @@ export default function Home() {
                 <div className="panel-heading"><div><strong>Outbound webhook</strong><span>POST completed access events to another server</span></div><Webhook size={19} /></div>
                 <div className="webhook-body">
                   <div className="webhook-fields">
-                    <label className="switch-row full"><input type="checkbox" checked={webhookForm.enabled} onChange={(event) => setWebhookForm((current) => ({ ...current, enabled: event.target.checked }))} /><span><strong>Enable webhook delivery</strong><small>Send only after a valid scan is matched to a physical door opening.</small></span></label>
+                    <label className="switch-row full"><input type="checkbox" checked={webhookForm.enabled} onChange={(event) => setWebhookForm((current) => ({ ...current, enabled: event.target.checked }))} /><span><strong>Enable webhook delivery</strong><small>Send immediately when a valid scan is granted.</small></span></label>
                     <label className="form-field full"><span>Destination URL or template</span><input type="text" inputMode="url" required={webhookForm.enabled} value={webhookForm.url} onChange={(event) => setWebhookForm((current) => ({ ...current, url: event.target.value }))} placeholder={"https://example.com/events/{{person.pin}}"} /><small>Use a fixed URL, or insert <code>{"{{id}}"}</code>, <code>{"{{person.pin}}"}</code>, <code>{"{{person.cardNumber}}"}</code>, <code>{"{{door.id}}"}</code>, <code>{"{{door.name}}"}</code>, <code>{"{{device.serialNumber}}"}</code>, or <code>{"{{collectorId}}"}</code>. The full event is still sent as POST JSON.</small></label>
                     <label className="form-field"><span>Bearer token</span><div className="password-field"><KeyRound size={17} /><input type="password" value={webhookForm.secret} onChange={(event) => setWebhookForm((current) => ({ ...current, secret: event.target.value }))} autoComplete="new-password" placeholder={savedWebhook?.secretConfigured ? "Token saved — leave blank to keep it" : "Optional authorization token"} /></div><small>Sent as <code>Authorization: Bearer …</code> and stored encrypted.</small></label>
                     <label className="form-field"><span>Request timeout</span><select value={webhookForm.timeoutMs} onChange={(event) => setWebhookForm((current) => ({ ...current, timeoutMs: Number(event.target.value) }))}><option value={5000}>5 seconds</option><option value={8000}>8 seconds</option><option value={15000}>15 seconds</option><option value={30000}>30 seconds</option></select><small>Failed requests retry automatically up to 10 times.</small></label>
@@ -699,7 +779,7 @@ export default function Home() {
                   <aside className="webhook-summary">
                     <span className="webhook-icon"><Send size={21} /></span>
                     <strong>POST event</strong>
-                    <code>access.granted_opened</code>
+                    <code>access.granted</code>
                     <dl><div><dt>Pending</dt><dd>{webhookStatus.pending || 0}</dd></div><div><dt>Retrying</dt><dd>{webhookStatus.retrying || 0}</dd></div><div><dt>Delivered</dt><dd>{webhookStatus.delivered || 0}</dd></div><div><dt>Failed</dt><dd>{webhookStatus.failed || 0}</dd></div></dl>
                   </aside>
                 </div>
@@ -757,4 +837,62 @@ function HealthPanel({ title, good, rows }: { title: string; good: boolean; rows
 
 function EmptyState({ icon: Icon, title, text, compact = false }: { icon: typeof Activity; title: string; text: string; compact?: boolean }) {
   return <div className={`empty ${compact ? "compact" : ""}`}><Icon size={25} /><strong>{title}</strong><p>{text}</p></div>;
+}
+
+function PaginationBar({
+  page,
+  totalPages,
+  total,
+  limit,
+  loading = false,
+  onPageChange,
+  onLimitChange,
+}: {
+  page: number;
+  totalPages: number;
+  total: number;
+  limit: number;
+  loading?: boolean;
+  onPageChange: (page: number) => void;
+  onLimitChange: (limit: number) => void;
+}) {
+  const start = total === 0 ? 0 : (page - 1) * limit + 1;
+  const end = Math.min(total, page * limit);
+  return (
+    <div className="pagination-bar">
+      <div className="pagination-summary">
+        <span>
+          {total === 0
+            ? "0 events"
+            : `Showing ${start.toLocaleString()}–${end.toLocaleString()} of ${total.toLocaleString()}`}
+        </span>
+        <label className="pagination-size">
+          <span>Rows</span>
+          <select value={limit} onChange={(event) => onLimitChange(Number(event.target.value))} disabled={loading}>
+            <option value={10}>10</option>
+            <option value={25}>25</option>
+            <option value={50}>50</option>
+            <option value={100}>100</option>
+          </select>
+        </label>
+      </div>
+      <div className="pagination-controls">
+        <button type="button" onClick={() => onPageChange(1)} disabled={loading || page <= 1} aria-label="First page">
+          <ChevronsLeft size={16} />
+        </button>
+        <button type="button" onClick={() => onPageChange(page - 1)} disabled={loading || page <= 1} aria-label="Previous page">
+          <ChevronLeft size={16} />
+        </button>
+        <span className="pagination-page">
+          Page {page.toLocaleString()} of {totalPages.toLocaleString()}
+        </span>
+        <button type="button" onClick={() => onPageChange(page + 1)} disabled={loading || page >= totalPages} aria-label="Next page">
+          <ChevronRight size={16} />
+        </button>
+        <button type="button" onClick={() => onPageChange(totalPages)} disabled={loading || page >= totalPages} aria-label="Last page">
+          <ChevronsRight size={16} />
+        </button>
+      </div>
+    </div>
+  );
 }

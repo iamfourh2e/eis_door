@@ -10,7 +10,9 @@ let connectedAt = null;
 async function ensureIndexes(db) {
   await Promise.all([
     db.collection("events").createIndex({ sourceKey: 1 }, { unique: true }),
-    db.collection("events").createIndex({ eventTime: -1 }),
+    db.collection("events").createIndex({ eventTime: -1, _id: -1 }),
+    db.collection("events").createIndex({ accessResult: 1, eventTime: -1 }),
+    db.collection("events").createIndex({ severity: 1, eventTime: -1 }),
     db.collection("events").createIndex({ doorName: 1, eventTime: -1 }),
     db.collection("events").createIndex({ "delivery.status": 1, createdAt: 1 }),
     db.collection("doors").createIndex({ doorId: 1 }, { unique: true }),

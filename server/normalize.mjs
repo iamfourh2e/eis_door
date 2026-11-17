@@ -22,7 +22,7 @@ export function parseEventTime(value, fallback = new Date()) {
 
 export function classifyTransaction(eventName = "") {
   const name = text(eventName).toLowerCase();
-  if (/normal verify open|verification successful|access granted|open successfully/.test(name)) {
+  if (/normal verif(?:y|ication) open|verification successful|access granted|open successfully/.test(name)) {
     return { eventType: "access_granted", accessResult: "granted", severity: "info" };
   }
   if (/not registered|denied|failed|invalid|expired|anti-passback|forbidden/.test(name)) {

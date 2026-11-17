@@ -4,7 +4,7 @@ import { db } from "./db.mjs";
 import { broadcast } from "./realtime.mjs";
 import { doorTransition, normalizeDoor, normalizeTransaction } from "./normalize.mjs";
 import { getZkbioSettings, zkbioSettingsIssue } from "./settings.mjs";
-import { enqueueAccessOpenedWebhook } from "./webhooks.mjs";
+import { enqueueAccessGrantedWebhook, enqueueAccessOpenedWebhook } from "./webhooks.mjs";
 
 const state = {
   running: false,
@@ -61,13 +61,23 @@ async function insertEvent(event) {
   );
   if (result.upsertedCount) {
     state.eventsInserted += 1;
-    broadcast("event", { ...event, _id: result.upsertedId });
+    const insertedEvent = { ...event, _id: result.upsertedId };
+    broadcast("event", insertedEvent);
+    if (event.eventType === "access_granted") {
+      await enqueueAccessGrantedWebhook(insertedEvent);
+    }
     return true;
   }
   return false;
 }
 
+function formatLocalDateTime(date) {
+  const pad = (value) => String(value).padStart(2, "0");
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}`;
+}
+
 async function pollTransactions(settings) {
+  const pollStartedAt = Date.now();
   const records = await request(settings, "/api/transaction/monitor", {
     timestamp: state.monitorTimestamp,
   });
@@ -76,6 +86,7 @@ async function pollTransactions(settings) {
   await Promise.all(
     list.map((raw) => insertEvent(normalizeTransaction(raw, config.collectorId))),
   );
+  state.monitorTimestamp = pollStartedAt;
 }
 
 async function pollDoors(settings) {
@@ -167,7 +178,9 @@ async function cycle() {
     state.lastSuccessAt = new Date();
     state.lastError = null;
   } catch (error) {
-    state.lastError = error instanceof Error ? error.message : String(error);
+    const message = error instanceof Error ? error.message : String(error);
+    state.lastError = message;
+    console.error(`[${new Date().toISOString()}] [collector] Poll cycle failed: ${message}`);
   } finally {
     state.lastDurationMs = Date.now() - started;
     state.cycleRunning = false;
@@ -189,12 +202,18 @@ async function backfill() {
     ? new Date(latest.eventTime.getTime() - 60_000)
     : new Date(Date.now() - 15 * 60_000);
   const data = await request(settings, "/api/v2/transaction/list", {
-    startDate: start.toISOString().slice(0, 19).replace("T", " "),
-    endDate: new Date().toISOString().slice(0, 19).replace("T", " "),
+    startDate: formatLocalDateTime(start),
+    endDate: formatLocalDateTime(new Date()),
     pageNo: 1,
     pageSize: 1000,
   });
-  const records = Array.isArray(data) ? data : Array.isArray(data?.data) ? data.data : [];
+  const records = Array.isArray(data)
+    ? data
+    : Array.isArray(data?.data)
+      ? data.data
+      : Array.isArray(data?.list)
+        ? data.list
+        : [];
   await Promise.all(
     records.map((raw) => insertEvent(normalizeTransaction(raw, config.collectorId))),
   );
@@ -253,7 +272,16 @@ export function startCollector() {
   if (state.running) return;
   state.running = true;
   scheduledCycle();
-  backfillTimer = setInterval(() => backfill().catch(() => {}), 60_000);
+  backfill().catch((error) => {
+    console.error(`[${new Date().toISOString()}] [collector] Initial backfill failed: ${error instanceof Error ? error.message : error}`);
+  });
+  backfillTimer = setInterval(
+    () =>
+      backfill().catch((error) => {
+        console.error(`[${new Date().toISOString()}] [collector] Backfill failed: ${error instanceof Error ? error.message : error}`);
+      }),
+    30_000,
+  );
   forwardTimer = setInterval(() => forwardPending().catch(() => {}), 10_000);
 }
 

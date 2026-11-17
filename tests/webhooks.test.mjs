@@ -37,6 +37,27 @@ test("builds the completed access webhook payload", () => {
   assert.deepEqual(payload.raw.transaction, { logId: 161 });
 });
 
+test("builds an access.granted webhook payload without door transition", () => {
+  const payload = webhookPayload({
+    _id: "evt-1",
+    personPin: "813",
+    personName: "Chao Sokpanha",
+    cardNumber: "123456",
+    verificationMode: "Only Card",
+    eventName: "Normal Verification Open",
+    eventTime: new Date("2026-11-17T02:42:29Z"),
+    readerName: "Right_site-1-In",
+    doorName: "Right_site-1",
+    deviceSn: "DEV-1",
+    rawPayload: { logId: 200 },
+  });
+  assert.equal(payload.type, "access.granted");
+  assert.equal(payload.id, "evt-1");
+  assert.equal(payload.person.pin, "813");
+  assert.equal(payload.door.name, "Right_site-1");
+  assert.equal(payload.door.openedAt, null);
+});
+
 test("resolves and URL-encodes webhook destination fields", () => {
   const url = resolveWebhookUrl(
     "https://example.com/events/{{person.pin}}?door={{door.id}}",

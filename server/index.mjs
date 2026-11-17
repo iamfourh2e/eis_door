@@ -91,19 +91,57 @@ app.get("/api/dashboard", async (_request, response) => {
   response.json({ totalDoors, onlineDoors, openDoors, activeAlerts, scansToday, deniedToday, pendingUploads });
 });
 
+function escapeRegex(value) {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
 app.get("/api/events", async (request, response) => {
   const database = db();
   if (!database) return response.status(503).json({ error: "MongoDB is not connected" });
-  const limit = Math.min(200, Math.max(1, Number.parseInt(String(request.query.limit ?? 50), 10) || 50));
+  const limit = Math.min(100, Math.max(1, Number.parseInt(String(request.query.limit ?? 25), 10) || 25));
+  const requestedPage = Math.max(1, Number.parseInt(String(request.query.page ?? 1), 10) || 1);
   const filter = {};
-  if (request.query.result) filter.accessResult = request.query.result;
-  if (request.query.door) filter.doorName = request.query.door;
-  const events = await database.collection("events")
+  const result = String(request.query.result ?? "").trim();
+  if (result && result !== "all") {
+    filter.$or = [{ accessResult: result }, { severity: result }];
+  }
+  if (request.query.door) {
+    filter.doorName = String(request.query.door);
+  }
+  const search = String(request.query.search ?? "").trim();
+  if (search) {
+    const regex = new RegExp(escapeRegex(search), "i");
+    const searchFilter = [
+      { personName: regex },
+      { personPin: regex },
+      { cardNumber: regex },
+      { doorName: regex },
+      { eventName: regex },
+    ];
+    if (filter.$or) {
+      filter.$and = [{ $or: filter.$or }, { $or: searchFilter }];
+      delete filter.$or;
+    } else {
+      filter.$or = searchFilter;
+    }
+  }
+
+  const eventsCollection = database.collection("events");
+  const total = Object.keys(filter).length === 0
+    ? await eventsCollection.estimatedDocumentCount()
+    : await eventsCollection.countDocuments(filter);
+  const totalPages = Math.max(1, Math.ceil(total / limit));
+  const page = Math.min(requestedPage, totalPages);
+  const skip = (page - 1) * limit;
+
+  const items = await eventsCollection
     .find(filter, { projection: { photoBase64: 0 } })
-    .sort({ eventTime: -1 })
+    .sort({ eventTime: -1, _id: -1 })
+    .skip(skip)
     .limit(limit)
     .toArray();
-  response.json(serialize(events));
+
+  response.json(serialize({ items, page, limit, total, totalPages }));
 });
 
 app.get("/api/events/:id", async (request, response) => {
