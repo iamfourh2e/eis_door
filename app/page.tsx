@@ -147,6 +147,41 @@ type WebhookForm = {
   timeoutMs: number;
 };
 
+type WebhookLog = {
+  _id: string;
+  deliveryId: string;
+  eventType?: string;
+  status: string;
+  attempts: number;
+  responseStatus?: number;
+  responseBody?: string;
+  resolvedUrl?: string;
+  lastError?: string | null;
+  createdAt: string;
+  updatedAt?: string;
+  deliveredAt?: string;
+  payload?: {
+    person?: { pin?: string | null; name?: string | null; cardNumber?: string | null };
+    door?: { name?: string | null };
+  };
+};
+
+type PaginatedWebhookLogs = {
+  items: WebhookLog[];
+  page: number;
+  limit: number;
+  total: number;
+  totalPages: number;
+};
+
+const emptyWebhookLogsPage = (limit = 25): PaginatedWebhookLogs => ({
+  items: [],
+  page: 1,
+  limit,
+  total: 0,
+  totalPages: 1,
+});
+
 type SimulatorStatus = {
   available: boolean;
   baseUrl?: string;
@@ -258,6 +293,13 @@ export default function Home() {
   const [webhookStatus, setWebhookStatus] = useState<Record<string, number>>({});
   const [webhookSaving, setWebhookSaving] = useState(false);
   const [webhookMessage, setWebhookMessage] = useState<{ tone: "success" | "warning"; text: string } | null>(null);
+  const [webhookLogsPage, setWebhookLogsPage] = useState<PaginatedWebhookLogs>(() => emptyWebhookLogsPage(25));
+  const [webhookLogPage, setWebhookLogPage] = useState(1);
+  const [webhookLogLimit, setWebhookLogLimit] = useState(25);
+  const [webhookLogStatus, setWebhookLogStatus] = useState("all");
+  const [webhookLogSearch, setWebhookLogSearch] = useState("");
+  const [debouncedWebhookLogSearch, setDebouncedWebhookLogSearch] = useState("");
+  const [webhookLogsLoading, setWebhookLogsLoading] = useState(false);
   const [simulator, setSimulator] = useState<SimulatorStatus | null>(null);
   const [simulatorBusy, setSimulatorBusy] = useState("");
   const [simulatorMessage, setSimulatorMessage] = useState<{ tone: "success" | "warning"; text: string } | null>(null);
@@ -281,6 +323,35 @@ export default function Home() {
     }, 250);
     return () => window.clearTimeout(timer);
   }, [search]);
+
+  useEffect(() => {
+    const timer = window.setTimeout(() => {
+      setDebouncedWebhookLogSearch(webhookLogSearch.trim());
+    }, 250);
+    return () => window.clearTimeout(timer);
+  }, [webhookLogSearch]);
+
+  const loadWebhookLogs = useCallback(async () => {
+    if (!authUser) return;
+    setWebhookLogsLoading(true);
+    try {
+      const params = new URLSearchParams({
+        page: String(webhookLogPage),
+        limit: String(webhookLogLimit),
+      });
+      if (webhookLogStatus !== "all") params.set("status", webhookLogStatus);
+      if (debouncedWebhookLogSearch) params.set("search", debouncedWebhookLogSearch);
+      const response = await apiFetch(`${apiBase()}/webhooks/logs?${params.toString()}`, { cache: "no-store" });
+      if (!response.ok) throw new Error("Could not load webhook logs");
+      const nextPage = (await response.json()) as PaginatedWebhookLogs;
+      setWebhookLogsPage(nextPage);
+      if (nextPage.page !== webhookLogPage) setWebhookLogPage(nextPage.page);
+    } catch (error) {
+      setApiError(error instanceof Error ? error.message : "Unable to load webhook logs");
+    } finally {
+      setWebhookLogsLoading(false);
+    }
+  }, [authUser, debouncedWebhookLogSearch, webhookLogLimit, webhookLogPage, webhookLogStatus]);
 
   const loadHistory = useCallback(async () => {
     if (!authUser) return;
@@ -347,6 +418,12 @@ export default function Home() {
   }, [authUser, loadHistory, view]);
 
   useEffect(() => {
+    if (!authUser || view !== "settings") return;
+    const timer = window.setTimeout(loadWebhookLogs, 0);
+    return () => window.clearTimeout(timer);
+  }, [authUser, loadWebhookLogs, view]);
+
+  useEffect(() => {
     if (!authUser) return;
     const firstLoad = window.setTimeout(load, 0);
     const refresh = window.setInterval(load, 15_000);
@@ -357,8 +434,20 @@ export default function Home() {
         loadHistory();
       }
     };
+    const handleWebhookStream = () => {
+      if (view === "settings") {
+        if (webhookLogPage === 1) loadWebhookLogs();
+        apiFetch(`${apiBase()}/settings/webhook`, { cache: "no-store" })
+          .then((res) => (res.ok ? res.json() : null))
+          .then((data) => {
+            if (data?.status) setWebhookStatus(data.status);
+          })
+          .catch(() => {});
+      }
+    };
     stream.addEventListener("event", handleEventStream);
     stream.addEventListener("doors", load);
+    stream.addEventListener("webhook", handleWebhookStream);
     stream.addEventListener("health", (message) => {
       const collector = JSON.parse((message as MessageEvent).data);
       setHealth((current) => (current ? { ...current, collector } : current));
@@ -368,7 +457,7 @@ export default function Home() {
       window.clearInterval(refresh);
       stream.close();
     };
-  }, [authUser, historyPage, load, loadHistory, view]);
+  }, [authUser, historyPage, load, loadHistory, loadWebhookLogs, view, webhookLogPage]);
 
   const loadSettings = useCallback(async () => {
     try {
@@ -535,6 +624,7 @@ export default function Home() {
     setDoors([]);
     setLiveEventsPage(emptyEventsPage(liveLimit));
     setHistoryEventsPage(emptyEventsPage(historyLimit));
+    setWebhookLogsPage(emptyWebhookLogsPage(webhookLogLimit));
   }
 
   if (authLoading) {
@@ -786,6 +876,27 @@ export default function Home() {
                 {webhookMessage ? <div className={`settings-result webhook-result ${webhookMessage.tone}`} role="status">{webhookMessage.tone === "success" ? <CheckCircle2 size={18} /> : <AlertTriangle size={18} />}<span>{webhookMessage.text}</span></div> : null}
                 <div className="save-row webhook-save"><span>{savedWebhook?.updatedAt ? `Last updated ${formatDateTime(savedWebhook.updatedAt)}` : "Not configured yet"}</span><button type="submit" disabled={webhookSaving}>{webhookSaving ? "Saving and testing…" : "Save and send test POST"}</button></div>
               </form>
+
+              <section className="panel">
+                <div className="panel-heading"><div><strong>Webhook delivery logs</strong><span>Recent outbound webhook attempts from MongoDB</span></div><Webhook size={19} /></div>
+                <div className="filters">
+                  <label className="search-box"><Search size={17} /><input value={webhookLogSearch} onChange={(event) => { setWebhookLogSearch(event.target.value); setWebhookLogPage(1); }} placeholder="Search person, PIN, door, URL, or error" /></label>
+                  <label className="select-box"><Filter size={16} /><select value={webhookLogStatus} onChange={(event) => { setWebhookLogStatus(event.target.value); setWebhookLogPage(1); }}><option value="all">All statuses</option><option value="delivered">Delivered</option><option value="pending">Pending</option><option value="retrying">Retrying</option><option value="failed">Failed</option></select></label>
+                </div>
+                <WebhookLogsTable logs={webhookLogsPage.items} loading={webhookLogsLoading && !webhookLogsPage.items.length} />
+                <PaginationBar
+                  page={webhookLogsPage.page}
+                  totalPages={webhookLogsPage.totalPages}
+                  total={webhookLogsPage.total}
+                  limit={webhookLogLimit}
+                  loading={webhookLogsLoading}
+                  onPageChange={setWebhookLogPage}
+                  onLimitChange={(nextLimit) => {
+                    setWebhookLogLimit(nextLimit);
+                    setWebhookLogPage(1);
+                  }}
+                />
+              </section>
             </section>
           )}
         </div>
@@ -833,6 +944,34 @@ function DoorCard({ door }: { door: Door }) {
 
 function HealthPanel({ title, good, rows }: { title: string; good: boolean; rows: string[][] }) {
   return <div className="panel health-panel"><div className="panel-heading"><div><strong>{title}</strong><span>{good ? "Operating normally" : "Needs attention"}</span></div>{good ? <CheckCircle2 className="health-good" size={20} /> : <WifiOff className="health-bad" size={20} />}</div><dl>{rows.map(([label, value]) => <div key={label}><dt>{label}</dt><dd>{value}</dd></div>)}</dl></div>;
+}
+
+function WebhookLogsTable({ logs, loading }: { logs: WebhookLog[]; loading: boolean }) {
+  if (loading) return <div className="loading-row"><span />Loading webhook logs…</div>;
+  if (!logs.length) return <EmptyState icon={Webhook} title="No webhook deliveries yet" text="Granted card scans will appear here once webhook delivery is enabled." compact />;
+  return (
+    <div className="table-wrap">
+      <table>
+        <thead><tr><th>Date & time</th><th>Person / PIN</th><th>Door</th><th>Status</th><th>Attempts</th><th>HTTP</th><th>URL / Error</th></tr></thead>
+        <tbody>{logs.map((log) => {
+          const tone = log.status === "delivered" ? "success" : log.status === "failed" ? "danger" : log.status === "retrying" ? "warning" : "neutral";
+          const personName = log.payload?.person?.name;
+          const personPin = log.payload?.person?.pin;
+          return (
+            <tr key={log._id}>
+              <td className="nowrap">{formatDateTime(log.deliveredAt || log.updatedAt || log.createdAt)}</td>
+              <td><strong>{personName || (personPin ? `PIN ${personPin}` : "—")}</strong>{personName && personPin ? <small>PIN {personPin}</small> : null}</td>
+              <td>{log.payload?.door?.name || "—"}</td>
+              <td><span className={`status ${tone}`}>{log.status}</span></td>
+              <td className="nowrap">{log.attempts}</td>
+              <td className="nowrap">{log.responseStatus ?? "—"}</td>
+              <td>{log.lastError ? <span className="health-bad">{log.lastError}</span> : <small>{log.resolvedUrl || "—"}</small>}</td>
+            </tr>
+          );
+        })}</tbody>
+      </table>
+    </div>
+  );
 }
 
 function EmptyState({ icon: Icon, title, text, compact = false }: { icon: typeof Activity; title: string; text: string; compact?: boolean }) {

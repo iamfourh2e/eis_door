@@ -21,7 +21,8 @@ async function ensureIndexes(db) {
     db.collection("settings").createIndex({ key: 1 }, { unique: true }),
     db.collection("webhook_outbox").createIndex({ sourceEventId: 1 }, { unique: true }),
     db.collection("webhook_outbox").createIndex({ status: 1, nextAttemptAt: 1 }),
-    db.collection("webhook_outbox").createIndex({ createdAt: -1 }),
+    db.collection("webhook_outbox").createIndex({ status: 1, createdAt: -1, _id: -1 }),
+    db.collection("webhook_outbox").createIndex({ createdAt: -1, _id: -1 }),
     db.collection("users").createIndex({ username: 1 }, { unique: true }),
   ]);
 }

@@ -252,6 +252,48 @@ app.put("/api/settings/webhook", async (request, response) => {
   response.json({ settings: await getPublicWebhookSettings(), connectionTest, status: await webhookStatus() });
 });
 
+app.get("/api/webhooks/logs", async (request, response) => {
+  const database = db();
+  if (!database) return response.status(503).json({ error: "MongoDB is not connected" });
+
+  const limit = Math.min(100, Math.max(1, Number.parseInt(String(request.query.limit ?? 25), 10) || 25));
+  const requestedPage = Math.max(1, Number.parseInt(String(request.query.page ?? 1), 10) || 1);
+  const filter = {};
+  const status = String(request.query.status ?? "").trim();
+  if (status && status !== "all") {
+    filter.status = status;
+  }
+  const search = String(request.query.search ?? "").trim();
+  if (search) {
+    const regex = new RegExp(escapeRegex(search), "i");
+    filter.$or = [
+      { "payload.person.name": regex },
+      { "payload.person.pin": regex },
+      { "payload.door.name": regex },
+      { resolvedUrl: regex },
+      { lastError: regex },
+      { deliveryId: regex },
+    ];
+  }
+
+  const outbox = database.collection("webhook_outbox");
+  const total = Object.keys(filter).length === 0
+    ? await outbox.estimatedDocumentCount()
+    : await outbox.countDocuments(filter);
+  const totalPages = Math.max(1, Math.ceil(total / limit));
+  const page = Math.min(requestedPage, totalPages);
+  const skip = (page - 1) * limit;
+
+  const items = await outbox
+    .find(filter, { projection: { "payload.raw": 0 } })
+    .sort({ createdAt: -1, _id: -1 })
+    .skip(skip)
+    .limit(limit)
+    .toArray();
+
+  response.json(serialize({ items, page, limit, total, totalPages }));
+});
+
 app.post("/api/ingest/events", async (request, response) => {
   if (config.central.key && request.header("x-collector-key") !== config.central.key) {
     return response.status(401).json({ error: "Invalid collector key" });
