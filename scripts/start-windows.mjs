@@ -1,8 +1,9 @@
 import "dotenv/config";
 import { spawn, spawnSync } from "node:child_process";
-import { existsSync } from "node:fs";
+import { createReadStream, existsSync, statSync } from "node:fs";
+import http from "node:http";
 import net from "node:net";
-import { resolve } from "node:path";
+import { extname, resolve, sep } from "node:path";
 
 const rootDir = process.cwd();
 const vinextCli = resolve(rootDir, "node_modules/vinext/dist/cli.js");
@@ -55,6 +56,92 @@ function checkTcpPort(host, port, timeoutMs = 2000) {
     socket.once("timeout", () => done(false));
     socket.once("error", () => done(false));
   });
+}
+
+function getEphemeralPort() {
+  return new Promise((resolvePromise, reject) => {
+    const server = net.createServer();
+    server.unref();
+    server.on("error", reject);
+    server.listen(0, "127.0.0.1", () => {
+      const address = server.address();
+      const port = typeof address === "object" && address ? address.port : 0;
+      server.close(() => resolvePromise(port));
+    });
+  });
+}
+
+const MIME_TYPES = {
+  ".css": "text/css; charset=utf-8",
+  ".js": "application/javascript; charset=utf-8",
+  ".mjs": "application/javascript; charset=utf-8",
+  ".json": "application/json; charset=utf-8",
+  ".svg": "image/svg+xml",
+  ".png": "image/png",
+  ".jpg": "image/jpeg",
+  ".jpeg": "image/jpeg",
+  ".ico": "image/x-icon",
+  ".woff2": "font/woff2",
+  ".woff": "font/woff",
+  ".ttf": "font/ttf",
+  ".txt": "text/plain; charset=utf-8",
+  ".map": "application/json; charset=utf-8",
+};
+
+function startWindowsStaticProxy(publicPort, upstreamPort) {
+  const clientDir = resolve(rootDir, "dist/client");
+  const server = http.createServer((req, res) => {
+    const rawUrl = req.url || "/";
+    const pathnameOnly = rawUrl.split("?")[0];
+    if ((req.method === "GET" || req.method === "HEAD") && pathnameOnly !== "/" && !pathnameOnly.startsWith("/.vite")) {
+      try {
+        const decoded = decodeURIComponent(pathnameOnly).replace(/^\/+/, "");
+        const filePath = resolve(clientDir, decoded);
+        if (filePath.startsWith(clientDir + sep) && existsSync(filePath)) {
+          const stats = statSync(filePath);
+          if (stats.isFile()) {
+            const ext = extname(filePath).toLowerCase();
+            const isHashed = pathnameOnly.startsWith("/assets/");
+            res.writeHead(200, {
+              "Content-Type": MIME_TYPES[ext] || "application/octet-stream",
+              "Content-Length": String(stats.size),
+              "Cache-Control": isHashed ? "public, max-age=31536000, immutable" : "public, max-age=3600",
+            });
+            if (req.method === "HEAD") {
+              res.end();
+              return;
+            }
+            createReadStream(filePath).pipe(res);
+            return;
+          }
+        }
+      } catch {
+        // Fall through to upstream vinext server
+      }
+    }
+
+    const proxyReq = http.request(
+      {
+        hostname: "127.0.0.1",
+        port: upstreamPort,
+        path: rawUrl,
+        method: req.method,
+        headers: req.headers,
+      },
+      (proxyRes) => {
+        res.writeHead(proxyRes.statusCode || 502, proxyRes.headers);
+        proxyRes.pipe(res);
+      },
+    );
+    proxyReq.on("error", () => {
+      if (!res.headersSent) res.writeHead(502, { "Content-Type": "text/plain" });
+      res.end("Upstream web server is starting...");
+    });
+    req.pipe(proxyReq);
+  });
+
+  server.listen(Number(publicPort), "0.0.0.0");
+  return server;
 }
 
 function buildEnv(extra = {}) {
@@ -123,12 +210,14 @@ async function main() {
   ensureBuild();
 
   const children = [];
+  let proxyServer;
   let shuttingDown = false;
 
   const shutdown = (exitCode = 0) => {
     if (shuttingDown) return;
     shuttingDown = true;
     console.log("\n[doorwatch] Shutting down services...");
+    proxyServer?.close();
     for (const child of children) {
       if (!child.killed) {
         child.kill("SIGTERM");
@@ -180,12 +269,25 @@ async function main() {
   startChild("collector-api", ["server/index.mjs"], serverEnv);
 
   const webCommand = isDev ? "dev" : "start";
-  console.log(`[doorwatch] Starting web UI (${webCommand}) on http://localhost:${webPort}`);
-  startChild(
-    "web-ui",
-    [vinextCli, webCommand, "--host", "0.0.0.0", "--port", webPort],
-    isDev ? {} : { NODE_ENV: "production" }
-  );
+  if (!isDev && process.platform === "win32") {
+    // vinext@0.0.50 StaticFileCache keys paths using OS separators (`\` on Windows),
+    // causing `/assets/*` 404s in `vinext start`. Serve `dist/client` directly here.
+    const internalWebPort = String(await getEphemeralPort());
+    proxyServer = startWindowsStaticProxy(webPort, Number(internalWebPort));
+    console.log(`[doorwatch] Starting web UI (start + Windows static proxy) on http://localhost:${webPort}`);
+    startChild(
+      "web-ui",
+      [vinextCli, "start", "--host", "127.0.0.1", "--port", internalWebPort],
+      { NODE_ENV: "production" }
+    );
+  } else {
+    console.log(`[doorwatch] Starting web UI (${webCommand}) on http://localhost:${webPort}`);
+    startChild(
+      "web-ui",
+      [vinextCli, webCommand, "--host", "0.0.0.0", "--port", webPort],
+      isDev ? {} : { NODE_ENV: "production" }
+    );
+  }
 }
 
 main().catch((error) => {
